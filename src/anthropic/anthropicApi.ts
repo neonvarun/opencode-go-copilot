@@ -215,8 +215,14 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 						}
 					}
 					const joinedText = toolTexts.join("\n").trim();
+					// Always use string content for tool results to avoid 400 errors.
+					// Xiaomi MiMo (and potentially other providers) reject list-type
+					// tool message content and require a plain string.
+					// Flattening images to text references is safe for all models.
 					let content: string | (AnthropicTextBlock | AnthropicImageBlock)[];
-					if (toolImages.length > 0) {
+					const supportsVisionInToolResults = modelSupportsVision && !isMiMoModel(this._modelId);
+					if (toolImages.length > 0 && supportsVisionInToolResults) {
+						// Vision models (non-MiMo): keep images in tool results as multimodal content
 						const blocks: (AnthropicTextBlock | AnthropicImageBlock)[] = [];
 						if (joinedText) {
 							blocks.push({ type: "text", text: joinedText });
@@ -224,7 +230,8 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 						blocks.push(...toolImages);
 						content = blocks;
 					} else {
-						content = joinedText;
+						// Non-vision models, MiMo, and fallback: always use string content
+						content = joinedText || "";
 					}
 					toolResults.push({
 						type: "tool_result",
@@ -828,4 +835,12 @@ function dropOldestAnthropicImages(messages: AnthropicMessage[], maxBytes: numbe
 			apiMode: "anthropic",
 		});
 	}
+}
+
+/**
+ * Check if a model is Xiaomi MiMo (known to reject list-type tool message content).
+ * @see https://github.com/anomalyco/opencode/issues/32613
+ */
+function isMiMoModel(modelId: string): boolean {
+	return /mimo/i.test(modelId);
 }
