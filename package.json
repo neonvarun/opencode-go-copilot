@@ -405,6 +405,20 @@
 					"type": "boolean",
 					"default": true,
 					"description": "%config.enableCommitGeneration.desc%"
+				},
+				"opencodego.maxPayloadSizeMB": {
+					"type": "number",
+					"default": 10,
+					"minimum": 1,
+					"maximum": 50,
+					"markdownDescription": "Maximum estimated payload size (MB) for API requests. When the conversation history with images exceeds this limit, the oldest images are dropped to prevent 400 errors from upstream providers. Increase this if you need to send many images, or decrease to use less bandwidth."
+				},
+				"opencodego.maxImageSizeKB": {
+					"type": "number",
+					"default": 512,
+					"minimum": 64,
+					"maximum": 5120,
+					"markdownDescription": "Maximum size (KB) for individual images in API requests. Images larger than this limit may be dropped from conversation history when the payload exceeds the maximum. This is a soft limit used for payload size estimation."
 				}
 			}
 		}

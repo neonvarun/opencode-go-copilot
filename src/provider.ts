@@ -14,7 +14,7 @@ import * as path from "path";
 
 import type { ModelPreset, OpenCodeGoModelItem } from "./types";
 
-import { createRetryConfig, executeWithRetry, convertToolsToOpenAI } from "./utils";
+import { createRetryConfig, executeWithRetry, convertToolsToOpenAI, getMaxPayloadBytes } from "./utils";
 import { getCatalogProviderBaseUrl } from "./modelsDev";
 
 import { prepareLanguageModelChatInformation } from "./provideModel";
@@ -344,6 +344,19 @@ export class OpenCodeGoChatModelProvider implements LanguageModelChatProvider {
                 };
                 requestBody = anthropicApi.prepareRequestBody(requestBody, um, options);
 
+                // Final payload size safety check before sending
+                {
+                    const bodyJson = JSON.stringify(requestBody);
+                    const maxBytes = getMaxPayloadBytes();
+                    if (bodyJson.length > maxBytes) {
+                        logger.warn("request.payload.too_large", {
+                            sizeBytes: bodyJson.length,
+                            maxBytes,
+                            apiMode: "anthropic",
+                        });
+                    }
+                }
+
                 // Build Anthropic messages endpoint URL
                 const normalizedBaseUrl = BASE_URL.replace(/\/+$/, "");
                 const url = normalizedBaseUrl.endsWith("/v1")
@@ -421,6 +434,19 @@ export class OpenCodeGoChatModelProvider implements LanguageModelChatProvider {
                 };
 
                 requestBody = openaiApi.prepareRequestBody(requestBody, um, options);
+
+                // Final payload size safety check before sending
+                {
+                    const bodyJson = JSON.stringify(requestBody);
+                    const maxBytes = getMaxPayloadBytes();
+                    if (bodyJson.length > maxBytes) {
+                        logger.warn("request.payload.too_large", {
+                            sizeBytes: bodyJson.length,
+                            maxBytes,
+                            apiMode: "openai",
+                        });
+                    }
+                }
 
                 // Send chat request with retry
                 const url = `${BASE_URL.replace(/\/+$/, "")}/chat/completions`;

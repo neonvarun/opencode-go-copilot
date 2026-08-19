@@ -30,6 +30,8 @@ import {
     isResourceLinkMimeType,
     parseResourceLinkData,
     resolveResourceLinkToImage,
+    estimatePayloadSize,
+    getMaxPayloadBytes,
 } from "../utils";
 
 import { CommonApi, StreamUsage } from "../commonApi";
@@ -309,6 +311,25 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
                 out.push({ role, content: joinedText });
             }
         }
+        // Payload size guard: if the accumulated messages exceed the configured
+        // limit (default 10 MB), drop images from the oldest messages first.
+        // This prevents 400 errors from upstream providers when conversations
+        // contain many MCP screenshots (e.g. Chrome DevTools).
+        const maxPayloadBytes = getMaxPayloadBytes();
+        const estimatedSize = estimatePayloadSize(out);
+        if (estimatedSize > maxPayloadBytes) {
+            logger.warn("payload.exceeded", {
+                estimatedSize,
+                maxPayloadBytes,
+                messageCount: out.length,
+            });
+            dropOldestImages(out, maxPayloadBytes);
+            logger.info("payload.reduced", {
+                afterSize: estimatePayloadSize(out),
+                maxPayloadBytes,
+            });
+        }
+
         this._originalApiMessages = out as any[];
         return out;
     }
@@ -764,5 +785,97 @@ export class OpenaiApi extends CommonApi<OpenAIChatMessage, Record<string, unkno
         } finally {
             reader.releaseLock();
         }
+    }
+}
+
+/**
+ * Drop image content from the oldest messages until the estimated payload
+ * size falls below maxBytes. Replaces image_url content with a placeholder
+ * so the conversation remains coherent.
+ *
+ * Handles both user messages (direct image attachments) and tool messages
+ * (images returned by MCP tools like Chrome DevTools screenshots).
+ *
+ * Operates in-place on the messages array.
+ */
+function dropOldestImages(messages: OpenAIChatMessage[], maxBytes: number): void {
+    let currentSize = estimatePayloadSize(messages);
+    if (currentSize <= maxBytes) {
+        return;
+    }
+
+    // Walk messages from oldest (index 0) to newest
+    for (let i = 0; i < messages.length; i++) {
+        if (currentSize <= maxBytes) {
+            return;
+        }
+
+        const msg = messages[i];
+        if (!msg) {
+            continue;
+        }
+
+        // Handle user messages and tool messages — both can contain images
+        if (msg.role !== "user" && msg.role !== "tool") {
+            continue;
+        }
+
+        // Check if content is a multi-modal array (has image_url parts)
+        if (!Array.isArray(msg.content)) {
+            continue;
+        }
+
+        const contentArray = msg.content as ChatMessageContent[];
+        let hasImages = false;
+        for (const item of contentArray) {
+            if (item.type === "image_url") {
+                hasImages = true;
+                break;
+            }
+        }
+
+        if (!hasImages) {
+            continue;
+        }
+
+        // Replace the message content: keep text parts, replace images with placeholder
+        const newContent: ChatMessageContent[] = [];
+        for (const item of contentArray) {
+            if (item.type === "text") {
+                newContent.push(item);
+            } else if (item.type === "image_url") {
+                newContent.push({
+                    type: "text",
+                    text: "[Image omitted to reduce request payload size.]",
+                });
+            } else {
+                // Keep non-image content as-is
+                newContent.push(item);
+            }
+        }
+
+        // If only text remains and it's a single item, simplify to string content
+        if (newContent.length === 1 && newContent[0].type === "text") {
+            messages[i] = { ...msg, content: newContent[0].text };
+        } else {
+            messages[i] = { ...msg, content: newContent };
+        }
+
+        // Recalculate size only after an actual drop (avoid O(n²) serialization)
+        currentSize = estimatePayloadSize(messages);
+
+        logger.debug("payload.dropped-images", {
+            messageIndex: i,
+            role: msg.role,
+            afterSize: currentSize,
+        });
+    }
+
+    if (currentSize > maxBytes) {
+        logger.warn("payload.still-too-large", {
+            finalSize: currentSize,
+            maxBytes,
+            messageCount: messages.length,
+        });
     }
 }

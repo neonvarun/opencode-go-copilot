@@ -449,6 +449,42 @@ export function tryParseJSONObject(
 }
 
 
+/**
+ * Maximum recommended payload size in bytes (default: 10MB).
+ * Matches common API provider limits for chat completions endpoints.
+ */
+export const DEFAULT_MAX_PAYLOAD_BYTES = 10 * 1024 * 1024;
+
+/** Estimated overhead for non-message fields in the request body (model, stream, tools, etc.) in bytes. */
+const REQUEST_OVERHEAD_BYTES = 2048;
+
+/**
+ * Estimate the JSON payload size of an OpenAI-compatible messages array.
+ * Uses JSON.stringify for a fast approximation of the wire size.
+ * Adds a fixed overhead estimate for non-message request fields (model, stream, tools, temperature, etc.).
+ * @param messages The messages array to estimate.
+ * @param tools Optional tools array to include in the estimate.
+ * @returns Approximate payload size in bytes.
+ */
+export function estimatePayloadSize(messages: unknown[], tools?: unknown[]): number {
+    const payload: Record<string, unknown> = { messages };
+    if (tools && tools.length > 0) {
+        payload.tools = tools;
+    }
+    // JSON.stringify length + overhead for model, stream, temperature, etc.
+    return JSON.stringify(payload).length + REQUEST_OVERHEAD_BYTES;
+}
+
+/**
+ * Get the maximum payload size in bytes from VS Code settings.
+ * Falls back to DEFAULT_MAX_PAYLOAD_BYTES if not configured.
+ */
+export function getMaxPayloadBytes(): number {
+    const config = vscode.workspace.getConfiguration();
+    const maxMB = config.get<number>("opencodego.maxPayloadSizeMB", 10);
+    return maxMB * 1024 * 1024;
+}
+
 export function delay(ms: number, token?: CancellationToken): Promise<void> {
     return new Promise((resolve) => {
         if (token?.isCancellationRequested) {

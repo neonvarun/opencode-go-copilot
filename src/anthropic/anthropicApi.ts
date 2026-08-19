@@ -20,7 +20,7 @@ import type {
 	AnthropicStreamChunk,
 } from "./anthropicTypes";
 
-import { isImageMimeType, isToolResultPart, convertToolsToOpenAI, mapRole, storeDataUriImages, replaceDataUriImages, isResourceLinkMimeType, parseResourceLinkData, resolveResourceLinkToImage } from "../utils";
+import { isImageMimeType, isToolResultPart, convertToolsToOpenAI, mapRole, storeDataUriImages, replaceDataUriImages, isResourceLinkMimeType, parseResourceLinkData, resolveResourceLinkToImage, estimatePayloadSize, getMaxPayloadBytes } from "../utils";
 
 import { CommonApi } from "../commonApi";
 import { logger } from "../logger";
@@ -343,6 +343,27 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 
 		// Flush any tool results still buffered at the end of the message list
 		flushPendingToolResults();
+
+		// Payload size guard: if the accumulated messages exceed the configured
+		// limit (default 10 MB), drop images from the oldest messages first.
+		// This prevents 400 errors from upstream providers when conversations
+		// contain many MCP screenshots (e.g. Chrome DevTools).
+		const maxPayloadBytes = getMaxPayloadBytes();
+		const estimatedSize = estimatePayloadSize(out);
+		if (estimatedSize > maxPayloadBytes) {
+			logger.warn("payload.exceeded", {
+				estimatedSize,
+				maxPayloadBytes,
+				messageCount: out.length,
+				apiMode: "anthropic",
+			});
+			dropOldestAnthropicImages(out, maxPayloadBytes);
+			logger.info("payload.reduced", {
+				afterSize: estimatePayloadSize(out),
+				maxPayloadBytes,
+				apiMode: "anthropic",
+			});
+		}
 
 		this._originalApiMessages = out as any[];
 		return out;
@@ -735,5 +756,76 @@ export class AnthropicApi extends CommonApi<AnthropicMessage, AnthropicRequestBo
 		} finally {
 			reader.releaseLock();
 		}
+	}
+}
+
+/**
+ * Drop image content from the oldest Anthropic messages until the estimated
+ * payload size falls below maxBytes. Replaces image blocks with a placeholder
+ * so the conversation remains coherent.
+ *
+ * Operates in-place on the messages array.
+ */
+function dropOldestAnthropicImages(messages: AnthropicMessage[], maxBytes: number): void {
+	let currentSize = estimatePayloadSize(messages);
+	if (currentSize <= maxBytes) {
+		return;
+	}
+
+	for (let i = 0; i < messages.length; i++) {
+		if (currentSize <= maxBytes) {
+			return;
+		}
+
+		const msg = messages[i];
+		if (!msg || !Array.isArray(msg.content)) {
+			continue;
+		}
+
+		const content = msg.content as AnthropicContentBlock[];
+		let hasImages = false;
+		for (const block of content) {
+			if (block.type === "image") {
+				hasImages = true;
+				break;
+			}
+		}
+
+		if (!hasImages) {
+			continue;
+		}
+
+		// Replace image blocks with text placeholders, keep other blocks
+		const newContent: AnthropicContentBlock[] = [];
+		for (const block of content) {
+			if (block.type === "image") {
+				newContent.push({
+					type: "text",
+					text: "[Image omitted to reduce request payload size.]",
+				});
+			} else {
+				newContent.push(block);
+			}
+		}
+
+		messages[i] = { ...msg, content: newContent };
+
+		// Recalculate size only after an actual drop (avoid O(n²) serialization)
+		currentSize = estimatePayloadSize(messages);
+
+		logger.debug("payload.dropped-images", {
+			messageIndex: i,
+			afterSize: currentSize,
+			apiMode: "anthropic",
+		});
+	}
+
+	if (currentSize > maxBytes) {
+		logger.warn("payload.still-too-large", {
+			finalSize: currentSize,
+			maxBytes,
+			messageCount: messages.length,
+			apiMode: "anthropic",
+		});
 	}
 }
