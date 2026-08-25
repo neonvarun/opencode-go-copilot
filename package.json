@@ -24,7 +24,7 @@
 	"bugs": {
 		"url": "https://github.com/OnesoftQwQ/opencode-go-copilot/issues"
 	},
-	"version": "1.9.3",
+	"version": "1.10.1",
 	"engines": {
 		"vscode": "^1.116.0"
 	},
@@ -427,6 +427,9 @@
 	"scripts": {
 		"vscode:prepublish": "npm run compile",
 		"compile": "tsc -p ./",
+		"test": "npm run compile && node scripts/test-api-mode.mjs && node scripts/test-responses-api.mjs && node scripts/test-vision-history.mjs && node scripts/test-anthropic-tool-result-merge.mjs",
+		"test:api-mode": "npm run compile && node scripts/test-api-mode.mjs",
+		"test:responses-api": "npm run compile && node scripts/test-responses-api.mjs",
 		"test:vision-history": "npm run compile && node scripts/test-vision-history.mjs",
 		"lint": "eslint",
 		"watch": "tsc -watch -p ./",
